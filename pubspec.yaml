@@ -1,15 +1,21 @@
 name: just_gamepads
-description: "A new Flutter package project."
-version: 0.0.1
+description: "Cross-platform gamepad/controller input (Xbox, PlayStation, generic) — models, connect/disconnect + state streams, and native backends for Windows, Android, Web, macOS, iOS, and Linux."
+version: 0.1.0
 homepage:
+repository:
 
 environment:
   sdk: ^3.12.2
-  flutter: ">=1.17.0"
+  flutter: ">=3.3.0"
 
 dependencies:
   flutter:
     sdk: flutter
+  # Used directly by the pure-Dart web backend (browser Gamepad API via
+  # dart:js_interop) — not a plugin_platform_interface/web-plugin-class setup,
+  # since the web backend needs no platform-channel registration at all (see
+  # lib/src/backend/gamepad_backend_web.dart).
+  web: ^1.0.0
 
 dev_dependencies:
   flutter_test:
@@ -21,8 +27,37 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  # This section identifies this Flutter project as a plugin project.
+  # The 'pluginClass' specifies the class (in Java, Kotlin, Swift, Objective-C, etc.)
+  # which should be registered in the plugin registry. This is required for
+  # using method channels.
+  # The Android 'package' specifies package in which the registered class is.
+  # This is required for using method channels on Android.
+  # The 'ffiPlugin' specifies that native code should be built and bundled.
+  # This is required for using `dart:ffi`.
+  # All these are used by the tooling to maintain consistency when
+  # adding or updating assets for this project.
+  plugin:
+    platforms:
+      android:
+        package: com.justunknown.justgamepads
+        pluginClass: JustGamepadsPlugin
+      ios:
+        pluginClass: JustGamepadsPlugin
+      linux:
+        pluginClass: JustGamepadsPlugin
+      macos:
+        pluginClass: JustGamepadsPlugin
+      windows:
+        pluginClass: JustGamepadsPluginCApi
+      # No web entry: the web backend (lib/src/backend/gamepad_backend_web.dart)
+      # talks to the browser Gamepad API directly via package:web/dart:js_interop
+      # with no platform-channel/native component, so it needs no plugin-class
+      # registration — selected purely via conditional import, same pattern
+      # just_inputs already uses for its dart:io-vs-web split (see
+      # packages/just_inputs/lib/src/actions/_io_native.dart / _io_stub.dart).
 
-  # To add assets to your package, add an assets section, like this:
+  # To add assets to your plugin package, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
@@ -33,7 +68,7 @@ flutter:
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
 
-  # To add custom fonts to your package, add a fonts section here,
+  # To add custom fonts to your plugin package, add a fonts section here,
   # in this "flutter" section. Each entry in this list should have a
   # "family" key with the font family name, and a "fonts" key with a
   # list giving the asset and other descriptors for the font. For
