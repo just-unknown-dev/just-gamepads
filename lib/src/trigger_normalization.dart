@@ -1,24 +1,21 @@
 import 'models/gamepad_layout.dart';
 import 'models/gamepad_state.dart';
 
-/// Threshold above which an analog trigger counts as "pressed" for the
-/// digital `leftTriggerButton`/`rightTriggerButton` slots — matches the W3C
-/// Standard Gamepad spec's own guidance for deriving a button value from an
+/// Analog trigger value above which the trigger also counts as a pressed
+/// [GamepadButton.leftTriggerButton]/[GamepadButton.rightTriggerButton].
+///
+/// Follows the W3C Standard Gamepad guidance for deriving a button from an
 /// analog-only trigger.
 const double triggerButtonThreshold = 0.5;
 
-/// Derives [GamepadButton.leftTriggerButton]/[GamepadButton.rightTriggerButton]
-/// from the analog trigger axes whenever a backend didn't already report
-/// them natively as discrete buttons.
+/// Adds [GamepadButton.leftTriggerButton]/[GamepadButton.rightTriggerButton]
+/// to [state] when the analog trigger is past [triggerButtonThreshold] and
+/// the backend didn't report the button itself.
 ///
-/// Several platforms (Android generic motion events, Linux evdev, Windows'
-/// `RawGameController` fallback path) only ever deliver triggers as analog
-/// axes with no discrete keycode; Windows' primary `Gamepad` (WGI) path and
-/// Darwin's `GCExtendedGamepad` both report a real discrete `.isPressed`, so
-/// this is a no-op there (the button will already be present in
-/// [state.buttonsDown] and this function won't touch it). Shared here so the
-/// analog-threshold policy lives in exactly one place instead of being
-/// re-decided per native backend.
+/// Several platforms only report triggers as axes (Android, Linux, Windows'
+/// Xbox path); others also report a discrete press (Apple's GameController).
+/// Applying this everywhere keeps the threshold in one place. Returns [state]
+/// unchanged when nothing needs adding.
 GamepadState normalizeTriggerButtons(GamepadState state) {
   final needsLeft =
       !state.buttonsDown.contains(GamepadButton.leftTriggerButton) &&

@@ -1,20 +1,25 @@
-/// Coarse controller brand/family, used only for UI presentation (button
-/// glyphs/prompts) — never for input resolution, which always goes through
-/// the standard [GamepadButton]/[GamepadAxis] layout regardless of brand.
+/// Coarse controller family, for presentation only (button glyphs and
+/// prompts).
+///
+/// Input never depends on this: every controller reports through the same
+/// standard `GamepadButton`/`GamepadAxis` layout regardless of brand.
 enum GamepadType {
+  /// Xbox and XInput-compatible controllers.
   xbox,
+
+  /// PlayStation controllers (DualShock 4, DualSense).
   playStation,
+
+  /// Nintendo controllers (Switch Pro and similar).
   nintendoSwitchPro,
 
-  /// A real, connected controller that the classifier couldn't identify by
-  /// vendor/product id or name — still fully usable via the standard layout,
-  /// just rendered with generic button glyphs.
+  /// A connected controller that couldn't be identified by vendor/product id
+  /// or name. Still fully usable through the standard layout; show generic
+  /// glyphs.
   generic,
 
-  /// No identifying information was available at all (e.g. no controller
-  /// currently connected). Distinct from [generic] so callers can choose to
-  /// fall back to a default brand for "describe all configured bindings
-  /// regardless of momentary hardware presence" UI, rather than always
-  /// showing generic glyphs.
+  /// No identifying information at all (for example, no controller
+  /// connected). Distinct from [generic] so UI can fall back to a default
+  /// brand when describing bindings with no controller present.
   unknown,
 }

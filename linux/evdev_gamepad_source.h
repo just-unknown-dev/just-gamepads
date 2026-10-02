@@ -1,31 +1,34 @@
 #ifndef FLUTTER_PLUGIN_JUST_GAMEPADS_EVDEV_GAMEPAD_SOURCE_H_
 #define FLUTTER_PLUGIN_JUST_GAMEPADS_EVDEV_GAMEPAD_SOURCE_H_
 
-// NOTE: unverified/uncompiled on this machine (no Linux desktop toolchain on
-// Windows) — written from documented evdev/libudev/GLib APIs, matching
-// SDL2's own Linux joystick backend conventions where a choice had to be
-// made (axis ordering, gamepad-capability heuristic). Needs a first real
-// build + real-hardware smoke test on Linux, and `libudev-dev` installed
-// (see CMakeLists.txt's pkg_check_modules) before shipping.
-
 #include <flutter_linux/flutter_linux.h>
 #include <glib.h>
-#include <libudev.h>
 
+#include <cstdint>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
+#include <vector>
 
 namespace just_gamepads {
 
-// Enumerates /dev/input/event* gamepad-capable devices (evdev), watches for
-// hot-plug via a libudev monitor integrated into the GLib main loop (no
-// dedicated polling thread — everything here runs on the platform thread's
-// existing GLib main loop, unlike the Windows backend which genuinely needs
-// a background thread + message marshaling), and emits one
-// flutter::EncodableValue-equivalent `FlValue*` event map per
-// connect/disconnect/state change via a callback, matching the shared wire
-// protocol every backend speaks (see gamepad_wire_protocol.dart).
+// Reports game controllers from the kernel's evdev interface
+// (/dev/input/event*) and emits one FlValue event map per connect,
+// disconnect and state change (see gamepad_wire_protocol.dart for the
+// shape).
+//
+// Hot-plug comes from inotify on /dev/input, so the plugin needs no
+// libraries beyond GLib. Everything runs on the GLib main loop of the
+// platform thread; no extra threads.
+//
+// Controllers the kernel exposes with the standard gamepad buttons
+// (BTN_GAMEPAD) are reported in the semantic shape. Other joysticks are
+// reported in the raw positional shape for the shared Dart mapper.
+//
+// The app needs read access to /dev/input/event*. Desktop distributions
+// grant it to the logged-in user for joysticks (systemd-logind's uaccess);
+// sandboxes such as Flatpak or Snap must allow device access.
 class EvdevGamepadSource {
  public:
   using EventCallback = std::function<void(FlValue* event)>;
@@ -36,53 +39,70 @@ class EvdevGamepadSource {
   EvdevGamepadSource(const EvdevGamepadSource&) = delete;
   EvdevGamepadSource& operator=(const EvdevGamepadSource&) = delete;
 
+  // Starts watching and reports controllers already connected. Restarts
+  // cleanly if already started.
   void Start(EventCallback on_event);
+
+  // Stops watching and closes every device. Safe to call when not started.
   void Stop();
 
  private:
-  struct TrackedDevice {
-    std::string id;
-    int fd = -1;
-    guint io_watch_id = 0;
-    // Raw evdev axis codes -> [min, max], from EVIOCGABS — needed to
-    // normalize each device's raw integer axis range to -1.0..1.0 (evdev
-    // does not report pre-normalized floats the way
-    // Windows.Gaming.Input/Android MotionEvent/the browser Gamepad API do).
-    std::map<int, std::pair<int32_t, int32_t>> axis_ranges;
-    // Accumulated state between SYN_REPORT markers — evdev delivers
-    // individual EV_KEY/EV_ABS events, batched into one full snapshot per
-    // sync, matching every other backend's "push one snapshot per tick"
-    // model.
-    std::map<std::string, double> axes;
-    std::map<int, bool> buttons_down;  // keyed by raw BTN_* evdev code
+  struct AxisRange {
+    int32_t min = 0;
+    int32_t max = 0;
   };
 
-  static gboolean OnUdevMonitorReadable(GIOChannel* source,
-                                         GIOCondition condition,
-                                         gpointer user_data);
-  static gboolean OnDeviceReadable(GIOChannel* source, GIOCondition condition,
+  // Which evdev codes play which role, decided once per device from its
+  // capabilities (-1 = not present).
+  struct Layout {
+    bool generic = false;
+    int left_x = -1;
+    int left_y = -1;
+    int right_x = -1;
+    int right_y = -1;
+    int left_trigger = -1;
+    int right_trigger = -1;
+    // Face buttons: evdev's BTN_X/BTN_Y codes mean different positions on
+    // different drivers (see ButtonIndexFor in the .cc).
+    bool positional_face_buttons = false;
+    // Generic devices only: codes in report order.
+    std::vector<int> raw_axes;
+    std::vector<int> raw_buttons;
+  };
+
+  struct TrackedDevice {
+    std::string id;  // device node path, e.g. /dev/input/event5
+    int fd = -1;
+    guint watch_id = 0;
+    Layout layout;
+    // Between SYN_DROPPED and the next SYN_REPORT: events are discarded and
+    // state is re-read from the kernel.
+    bool dropping = false;
+    std::map<int, AxisRange> ranges;     // ABS code -> range
+    std::map<int, int32_t> abs_values;   // ABS code -> latest raw value
+    std::set<int> keys_down;             // KEY/BTN codes held
+  };
+
+  static gboolean OnInotifyReadable(GIOChannel* source,
+                                    GIOCondition condition,
                                     gpointer user_data);
+  static gboolean OnDeviceReadable(GIOChannel* source, GIOCondition condition,
+                                   gpointer user_data);
 
   void ScanExistingDevices();
-  void TryAddDevice(const std::string& syspath);
-  void RemoveDevice(const std::string& syspath);
-  bool IsGamepadCapable(int fd);
-  void ReadAbsInfo(TrackedDevice& device);
-  void HandleInputEvents(const std::string& syspath);
+  void TryAddDevice(const std::string& path);
+  void RemoveDevice(const std::string& path);
+  // Returns false once the device is gone.
+  bool ReadEvents(TrackedDevice& device);
+  void Resync(TrackedDevice& device);
   void EmitSnapshot(const TrackedDevice& device);
-  void EmitConnected(const std::string& id, const std::string& name,
-                      int vendor_id, int product_id);
+  void EmitConnected(const TrackedDevice& device, const std::string& name,
+                     int vendor_id, int product_id);
   void EmitDisconnected(const std::string& id);
 
   EventCallback on_event_;
-  struct udev* udev_ = nullptr;
-  struct udev_monitor* udev_monitor_ = nullptr;
-  GIOChannel* udev_channel_ = nullptr;
-  guint udev_watch_id_ = 0;
-
-  // Keyed by udev syspath (stable per physical connection) rather than the
-  // /dev/input/eventN name, since Linux can reassign event-node numbers
-  // across reconnects.
+  int inotify_fd_ = -1;
+  guint inotify_watch_id_ = 0;
   std::map<std::string, TrackedDevice> devices_;
 };
 

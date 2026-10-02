@@ -22,6 +22,7 @@ list(APPEND PLUGIN_SOURCES
   "just_gamepads_plugin.h"
   "gamepad_watcher.cpp"
   "gamepad_watcher.h"
+  "raw_layout.h"
 )
 
 # Define the plugin library target. Its name must not be changed (see comment
@@ -48,10 +49,9 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 # dependencies here.
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
-# runtimeobject.lib provides RoInitialize/RoUninitialize/RoGetActivationFactory
-# (WinRT activation via the classic ABI, used by gamepad_watcher.cpp to reach
-# Windows.Gaming.Input without requiring the C++/WinRT NuGet package's
-# projection-header generation, which this plugin template doesn't set up).
+# runtimeobject.lib provides RoInitialize/RoUninitialize/RoGetActivationFactory,
+# which gamepad_watcher.cpp uses to reach Windows.Gaming.Input through the
+# classic WinRT ABI (no C++/WinRT NuGet package needed).
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin runtimeobject)
 
 # List of absolute paths to libraries that should be bundled with the plugin.
@@ -63,20 +63,18 @@ set(just_gamepads_bundled_libraries
 )
 
 # === Tests ===
-# These unit tests can be run from a terminal after building the example, or
-# from Visual Studio after opening the generated solution file.
-
-# Only enable test builds when building the example (which sets this variable)
-# so that plugin clients aren't building the tests.
+# Built only when the including project sets include_just_gamepads_tests (the
+# example app does), so apps using the plugin never fetch googletest. Run
+# the resulting just_gamepads_test.exe from the example's build folder.
 if (${include_${PROJECT_NAME}_tests})
 set(TEST_RUNNER "${PROJECT_NAME}_test")
 enable_testing()
 
-# Add the Google Test dependency.
 include(FetchContent)
 FetchContent_Declare(
   googletest
-  URL https://github.com/google/googletest/archive/release-1.11.0.zip
+  URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.zip
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 # Prevent overriding the parent project's compiler/linker settings
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
@@ -84,23 +82,16 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 set(INSTALL_GTEST OFF CACHE BOOL "Disable installation of googletest" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# The plugin's C API is not very useful for unit testing, so build the sources
-# directly into the test binary rather than using the DLL.
+# The tests cover the pure layout helpers, which need neither WinRT nor the
+# Flutter DLL.
 add_executable(${TEST_RUNNER}
-  test/just_gamepads_plugin_test.cpp
-  ${PLUGIN_SOURCES}
+  test/raw_layout_test.cpp
+  raw_layout.h
 )
 apply_standard_settings(${TEST_RUNNER})
 target_include_directories(${TEST_RUNNER} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(${TEST_RUNNER} PRIVATE flutter_wrapper_plugin)
-target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock)
-# flutter_wrapper_plugin has link dependencies on the Flutter DLL.
-add_custom_command(TARGET ${TEST_RUNNER} POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-  "${FLUTTER_LIBRARY}" $<TARGET_FILE_DIR:${TEST_RUNNER}>
-)
+target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main)
 
-# Enable automatic test discovery.
 include(GoogleTest)
 gtest_discover_tests(${TEST_RUNNER})
 endif()

@@ -1,8 +1,6 @@
 import Cocoa
 import FlutterMacOS
 
-// NOTE: unverified/uncompiled on this machine (no Xcode on Windows) — see
-// GamepadController.swift's doc comment.
 public class JustGamepadsPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   private let controller = GamepadController()
 

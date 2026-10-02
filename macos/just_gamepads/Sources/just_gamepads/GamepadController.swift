@@ -1,40 +1,29 @@
 import GameController
 
-/// NOTE: unverified/uncompiled on this machine (no Xcode on Windows) —
-/// written from documented `GameController` framework APIs. Needs a first
-/// real build + real-hardware smoke test on macOS/iOS before shipping.
+/// Bridges Apple's GameController framework to the wire protocol every
+/// backend shares (see gamepad_wire_protocol.dart).
 ///
-/// Bridges Apple's `GameController` framework into the `EventChannel`
-/// wire protocol every backend shares (see gamepad_wire_protocol.dart).
-/// `GCExtendedGamepad` already normalizes Xbox/PlayStation/MFi controllers to
-/// named properties (`buttonA/B/X/Y`, shoulders, triggers with discrete
-/// `.isPressed` *and* analog `.value` — unlike Android/Windows' RawGameController
-/// fallback/Linux evdev, which only ever deliver triggers as analog, needing
-/// the shared Dart `normalizeTriggerButtons` step), thumbsticks, dpad,
-/// `buttonMenu`/`buttonOptions` — the cleanest of all backends, needing
-/// almost no remap logic at all. Identical on iOS and macOS (this file is
-/// duplicated verbatim in both `ios/` and `macos/` plugin source dirs — the
-/// GameController API surface used here doesn't differ between the two,
-/// only the surrounding Flutter plugin registration boilerplate does, which
-/// isn't worth a shared-source-set indirection at this size).
+/// `GCExtendedGamepad` already maps Xbox, PlayStation, Switch Pro and MFi
+/// controllers to named elements, with triggers reporting both an analog
+/// value and a discrete press, so this needs almost no remapping.
+///
+/// This file is identical in ios/ and macos/; only the plugin registration
+/// around it differs.
 final class GamepadController {
     typealias EventCallback = (_ event: [String: Any]) -> Void
 
     private var onEvent: EventCallback?
     private var connectObserver: NSObjectProtocol?
     private var disconnectObserver: NSObjectProtocol?
-    /// Keyed by `ObjectIdentifier(controller).hashValue` — GCController has
-    /// no stable hardware serial exposed uniformly across devices, so object
-    /// identity (stable for the lifetime of one connection) is used instead,
-    /// same approach as the Windows backend's raw-pointer-keyed maps.
-    private var trackedControllers: [Int: GCController] = [:]
+    // GCController exposes no stable hardware id, so a connection is
+    // identified by object identity, with a counter for the wire id.
+    private var trackedIds: [ObjectIdentifier: String] = [:]
+    private var trackedControllers: [ObjectIdentifier: GCController] = [:]
+    private var nextId = 1
 
     func start(onEvent: @escaping EventCallback) {
+        stop()
         self.onEvent = onEvent
-
-        for controller in GCController.controllers() {
-            track(controller)
-        }
 
         connectObserver = NotificationCenter.default.addObserver(
             forName: .GCControllerDidConnect, object: nil, queue: .main
@@ -42,12 +31,15 @@ final class GamepadController {
             guard let controller = notification.object as? GCController else { return }
             self?.track(controller)
         }
-
         disconnectObserver = NotificationCenter.default.addObserver(
             forName: .GCControllerDidDisconnect, object: nil, queue: .main
         ) { [weak self] notification in
             guard let controller = notification.object as? GCController else { return }
             self?.untrack(controller)
+        }
+
+        for controller in GCController.controllers() {
+            track(controller)
         }
     }
 
@@ -56,52 +48,51 @@ final class GamepadController {
         if let observer = disconnectObserver { NotificationCenter.default.removeObserver(observer) }
         connectObserver = nil
         disconnectObserver = nil
-        for (_, controller) in trackedControllers {
+        for controller in trackedControllers.values {
             controller.extendedGamepad?.valueChangedHandler = nil
         }
         trackedControllers.removeAll()
+        trackedIds.removeAll()
         onEvent = nil
     }
 
-    private func idFor(_ controller: GCController) -> String {
-        "gc-\(ObjectIdentifier(controller).hashValue)"
-    }
-
     private func track(_ controller: GCController) {
-        let id = idFor(controller)
-        trackedControllers[ObjectIdentifier(controller).hashValue] = controller
-        // Explicit even though main is already the documented default —
-        // guards against relying on undocumented per-OS-version behavior
-        // for where valueChangedHandler callbacks land.
+        let key = ObjectIdentifier(controller)
+        // Only full gamepads: micro gamepads (Siri Remote) and other
+        // profiles can't fill the standard layout.
+        guard trackedIds[key] == nil, let gamepad = controller.extendedGamepad else { return }
+        let id = "gc-\(nextId)"
+        nextId += 1
+        trackedIds[key] = id
+        trackedControllers[key] = controller
         controller.handlerQueue = .main
 
         emitConnected(id: id, controller: controller)
-
-        controller.extendedGamepad?.valueChangedHandler = { [weak self] gamepad, _ in
+        gamepad.valueChangedHandler = { [weak self] gamepad, _ in
             self?.emitState(id: id, gamepad: gamepad)
         }
+        emitState(id: id, gamepad: gamepad)
     }
 
     private func untrack(_ controller: GCController) {
-        let key = ObjectIdentifier(controller).hashValue
-        guard trackedControllers.removeValue(forKey: key) != nil else { return }
+        let key = ObjectIdentifier(controller)
+        guard let id = trackedIds.removeValue(forKey: key) else { return }
+        trackedControllers.removeValue(forKey: key)
         controller.extendedGamepad?.valueChangedHandler = nil
-        onEvent?(["event": "disconnected", "id": idFor(controller), "name": ""])
+        onEvent?(["event": "disconnected", "id": id])
     }
 
     private func emitConnected(id: String, controller: GCController) {
-        var name = controller.vendorName ?? ""
-        if #available(iOS 14.0, macOS 11.0, *) {
-            name = controller.productCategory
-        }
+        // GameController exposes no numeric vendor/product id. The display
+        // name is vendorName ("DualSense Wireless Controller"); the
+        // productCategory ("DualSense", "Xbox One", "Switch Pro Controller")
+        // is the more reliable classification hint.
+        let category = controller.productCategory
         onEvent?([
             "event": "connected",
             "id": id,
-            "name": name,
-            // No numeric vendor/product id is exposed by GameController —
-            // the shared Dart classifier falls back to name-substring
-            // matching against `productCategory`/`vendorName` for this
-            // backend (see GamepadDatabase's name-hint tier).
+            "name": controller.vendorName ?? category,
+            "typeHint": category,
         ])
     }
 
@@ -127,11 +118,8 @@ final class GamepadController {
         addIf(gamepad.dpad.left.isPressed, 14)
         addIf(gamepad.dpad.right.isPressed, 15)
 
-        // GameController's Y axes are +1 = up / -1 = down (documented:
-        // "-1.0 (bottom) to 1.0 (top)"), matching Windows.Gaming.Input's
-        // convention, not just_inputs' down-positive one (which the Web
-        // backend passes straight through unmodified from the W3C Standard
-        // Gamepad spec) — negate, same as the Windows backend does.
+        // GameController's Y axes are up-positive; the wire protocol is
+        // down-positive, so Y is negated.
         let axes: [String: Double] = [
             "leftStickX": Double(gamepad.leftThumbstick.xAxis.value),
             "leftStickY": Double(-gamepad.leftThumbstick.yAxis.value),

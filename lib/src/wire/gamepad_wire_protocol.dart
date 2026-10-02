@@ -1,56 +1,59 @@
-/// Parses the `EventChannel('just_gamepads/events')` message shape every
-/// native backend sends, kept as pure functions (no platform-channel
-/// dependency) so the parsing/normalization logic is unit-testable without
-/// mocking a channel.
+/// Parses the messages every native backend sends over the
+/// `EventChannel('just_gamepads/events')`.
 ///
-/// Wire shape (a `Map` per event, `StandardMessageCodec`-compatible types
-/// only):
+/// Kept as pure functions with no platform-channel dependency so the
+/// parsing and normalization can be unit tested without a channel.
+///
+/// Wire shape (one `Map` per event, `StandardMessageCodec` types only):
 /// ```
 /// {'event': 'connected', 'id': String, 'name': String,
-///  'vendorId': int?, 'productId': int?}
+///  'vendorId': int?, 'productId': int?,
+///  // Extra words for classification only, never shown (Apple's
+///  // productCategory, e.g. "DualSense").
+///  'typeHint': String?}
 /// {'event': 'disconnected', 'id': String}
 /// {'event': 'state', 'id': String,
-///   // Either semantic (native side already knows what each axis/button
-///   // means — true for Windows' primary Gamepad(WGI) path, Android's
-///   // KeyEvent/MotionEvent constants, and Darwin's GCExtendedGamepad):
+///   // Either semantic (the platform already knows what each control is:
+///   // Windows' Xbox path, Android, Apple, Linux gamepad drivers):
 ///   'axes': Map<String, double>?, 'buttons': List<int>?,
-///   // ...or raw/positional (native side enumerated a HID device it
-///   // couldn't semantically identify — Windows' RawGameController
-///   // fallback, or an unrecognized Linux evdev device):
+///   // ...or raw/positional (an unrecognized device: Windows' raw path,
+///   // generic Linux joysticks), mapped by mapGenericHid:
 ///   'rawAxes': List<double>?, 'rawButtons': List<bool>?,
+///   // Optional with either shape; ORed into the d-pad buttons.
 ///   'dpadUp': bool?, 'dpadDown': bool?, 'dpadLeft': bool?, 'dpadRight': bool?}
 /// ```
-/// A 'state' message always carries exactly one of the two shapes; whichever
-/// is present is used, then [normalizeTriggerButtons] is always applied.
+/// Semantic fields win when both shapes are present. Trigger buttons are
+/// always derived with [normalizeTriggerButtons].
 library;
 
 import '../gamepad_database.dart';
 import '../generic_hid_mapper.dart';
 import '../models/gamepad_events.dart';
 import '../models/gamepad_info.dart';
+import '../models/gamepad_layout.dart';
 import '../models/gamepad_state.dart';
 import '../trigger_normalization.dart';
 
-// TEMP DEBUG: see the throttled print in parseStateEvent below.
-int _debugLogThrottleCounter = 0;
-
+/// Parses the identity part of a `connected`/`disconnected` message.
 GamepadInfo parseGamepadInfo(Map<dynamic, dynamic> raw) {
   final vendorId = (raw['vendorId'] as num?)?.toInt();
   final productId = (raw['productId'] as num?)?.toInt();
   final name = raw['name'] as String? ?? '';
+  final typeHint = raw['typeHint'] as String?;
   return GamepadInfo(
     id: raw['id'] as String,
     name: name,
     type: GamepadDatabase.classify(
       vendorId: vendorId,
       productId: productId,
-      nameHint: name,
+      nameHint: typeHint == null ? name : '$typeHint $name',
     ),
     vendorId: vendorId,
     productId: productId,
   );
 }
 
+/// Parses a `connected` or `disconnected` message.
 GamepadConnectionEvent parseConnectionEvent(Map<dynamic, dynamic> raw) {
   return GamepadConnectionEvent(
     info: parseGamepadInfo(raw),
@@ -58,52 +61,44 @@ GamepadConnectionEvent parseConnectionEvent(Map<dynamic, dynamic> raw) {
   );
 }
 
+/// Parses a `state` message into a normalized [GamepadStateEvent].
 GamepadStateEvent parseStateEvent(Map<dynamic, dynamic> raw) {
   final id = raw['id'] as String;
-  final rawAxes = raw['axes'] as Map<dynamic, dynamic>?;
-  final rawButtons = raw['buttons'] as List<dynamic>?;
+  final axes = raw['axes'] as Map<dynamic, dynamic>?;
+  final buttons = raw['buttons'] as List<dynamic>?;
+  final dpadUp = raw['dpadUp'] as bool? ?? false;
+  final dpadDown = raw['dpadDown'] as bool? ?? false;
+  final dpadLeft = raw['dpadLeft'] as bool? ?? false;
+  final dpadRight = raw['dpadRight'] as bool? ?? false;
 
   GamepadState state;
-  if (rawAxes != null || rawButtons != null) {
-    // TEMP DEBUG (remove once the Windows-controller left-stick bug is
-    // diagnosed): confirms whether this device is using the *semantic*
-    // path (native side already knows what each axis means — WGI's Gamepad
-    // class for real XInput/Xbox-compatible hardware) rather than the raw/
-    // positional fallback, and dumps the actual values.
-    _debugLogThrottleCounter++;
-    if (_debugLogThrottleCounter % 30 == 0) {
-      // ignore: avoid_print
-      print('[just_gamepads] SEMANTIC axes=$rawAxes buttons=$rawButtons');
-    }
+  if (axes != null || buttons != null) {
     state = GamepadState(
-      axes: rawAxes?.map(
+      axes: axes?.map(
         (key, value) => MapEntry(key as String, (value as num).toDouble()),
       ),
-      buttonsDown: rawButtons?.map((e) => (e as num).toInt()).toSet(),
+      buttonsDown: {
+        ...?buttons?.map((e) => (e as num).toInt()),
+        if (dpadUp) GamepadButton.dpadUp,
+        if (dpadDown) GamepadButton.dpadDown,
+        if (dpadLeft) GamepadButton.dpadLeft,
+        if (dpadRight) GamepadButton.dpadRight,
+      },
     );
   } else {
-    final parsedRawAxes = (raw['rawAxes'] as List<dynamic>?)
-            ?.map((e) => (e as num).toDouble())
-            .toList() ??
-        const <double>[];
-    final parsedRawButtons = (raw['rawButtons'] as List<dynamic>?)
-            ?.map((e) => e as bool)
-            .toList() ??
-        const <bool>[];
-    _debugLogThrottleCounter++;
-    if (_debugLogThrottleCounter % 30 == 0) {
-      // ignore: avoid_print
-      print(
-        '[just_gamepads] RAW rawAxes=$parsedRawAxes rawButtons=$parsedRawButtons',
-      );
-    }
     state = mapGenericHid(
-      rawAxes: parsedRawAxes,
-      rawButtons: parsedRawButtons,
-      dpadUp: raw['dpadUp'] as bool? ?? false,
-      dpadDown: raw['dpadDown'] as bool? ?? false,
-      dpadLeft: raw['dpadLeft'] as bool? ?? false,
-      dpadRight: raw['dpadRight'] as bool? ?? false,
+      rawAxes: [
+        for (final e in raw['rawAxes'] as List<dynamic>? ?? const [])
+          (e as num).toDouble(),
+      ],
+      rawButtons: [
+        for (final e in raw['rawButtons'] as List<dynamic>? ?? const [])
+          e as bool,
+      ],
+      dpadUp: dpadUp,
+      dpadDown: dpadDown,
+      dpadLeft: dpadLeft,
+      dpadRight: dpadRight,
     );
   }
 

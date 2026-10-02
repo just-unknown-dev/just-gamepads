@@ -1,20 +1,22 @@
 import 'models/gamepad_layout.dart';
 import 'models/gamepad_state.dart';
 
-/// Positional remap heuristic for a raw HID device the OS/browser didn't
-/// already normalize to a standard gamepad (i.e. whatever `GamepadDatabase`
-/// couldn't help with either) — every native backend's raw-HID fallback path
-/// funnels through this one shared implementation rather than each platform
-/// guessing its own positional layout.
+/// Positional mapping for a controller the platform couldn't map to the
+/// standard layout itself.
 ///
-/// Assumes the common, by-far-most-frequent HID gamepad report shape: axes
-/// declared left-stick-X/Y, right-stick-X/Y, then (if present) left/right
-/// trigger; buttons declared face buttons, then bumpers/triggers, then
-/// back/start, then stick-clicks, in that order. Real unrecognized devices
-/// won't all match this exactly, but it's a strictly better default than
-/// reporting nothing, and matches what most consumer HID gamepads actually
-/// do — the same assumption SDL and the browser Gamepad API's own generic
-/// fallback path make.
+/// Every backend's raw fallback path goes through this one function, so the
+/// guess is made in exactly one place. It assumes the most common HID
+/// gamepad report shape, the same assumption SDL and browsers make for
+/// unknown devices:
+///
+///  * axes: left stick X, left stick Y, right stick X, right stick Y, then
+///    (if present) left and right trigger. Sticks are expected in -1.0..1.0
+///    and triggers in 0.0..1.0.
+///  * buttons: the four face buttons (bottom, right, left, top), bumpers,
+///    triggers, back, start, then the two stick clicks.
+///
+/// Extra axes and buttons are ignored. The d-pad is passed separately because
+/// raw devices report it as a hat switch rather than buttons.
 GamepadState mapGenericHid({
   required List<double> rawAxes,
   required List<bool> rawButtons,
@@ -50,7 +52,11 @@ GamepadState mapGenericHid({
   ];
 
   final buttons = <int>{
-    for (var i = 0; i < rawButtons.length && i < positionalButtonOrder.length; i++)
+    for (
+      var i = 0;
+      i < rawButtons.length && i < positionalButtonOrder.length;
+      i++
+    )
       if (rawButtons[i]) positionalButtonOrder[i],
     if (dpadUp) GamepadButton.dpadUp,
     if (dpadDown) GamepadButton.dpadDown,

@@ -1,11 +1,9 @@
-/// Cross-platform gamepad/controller input — Xbox, PlayStation, and generic
-/// controllers on Windows, Android, Web, macOS, iOS, and Linux, normalized to
-/// one standard button/axis layout regardless of brand.
+/// Cross-platform gamepad input for Flutter: Xbox, PlayStation, Nintendo
+/// and generic controllers on Android, iOS, macOS, Windows, Linux and the
+/// web (including WebAssembly), all reported in one standard button and
+/// axis layout.
 ///
-/// Low-level and dependency-free by design: this package knows nothing about
-/// `just_inputs`' action-binding layer — see `just_inputs`'
-/// `GamepadInputAdapter` for how it's consumed by this project's input
-/// system.
+/// Start with [GamepadManager.instance].
 library;
 
 export 'src/backend/gamepad_backend.dart' show GamepadBackend;

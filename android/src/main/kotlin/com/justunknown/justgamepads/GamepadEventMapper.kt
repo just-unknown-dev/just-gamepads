@@ -5,12 +5,10 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 
 /**
- * Semantic keycode/axis -> just_inputs' standard GamepadButton/GamepadAxis
- * layout. Android's KeyEvent/MotionEvent constants are already *semantic*
- * (KEYCODE_BUTTON_A really does mean "the A button", not a positional
- * guess), so — unlike Windows' RawGameController fallback path or an
- * unrecognized Linux evdev device — this mapper needs no generic/positional
- * heuristic at all: every value here is a direct 1:1 translation.
+ * Android key codes and motion axes -> the package's standard
+ * GamepadButton/GamepadAxis layout. Android's constants are already semantic
+ * (KEYCODE_BUTTON_A is the bottom face button on every controller, mapped by
+ * the OS key layout files), so every value here is a direct translation.
  */
 object GamepadEventMapper {
     /** `SOURCE_GAMEPAD`/`SOURCE_JOYSTICK`, excluding virtual devices. */
@@ -59,18 +57,24 @@ object GamepadEventMapper {
     fun axesForMotionEvent(event: MotionEvent): Map<String, Double> {
         val axes = HashMap<String, Double>()
         axes["leftStickX"] = event.getAxisValue(MotionEvent.AXIS_X).toDouble()
-        // Android's joystick Y convention is already "negative = up,
-        // positive = down" (per MotionEvent.AXIS_Y docs) — matching
-        // just_inputs' down-positive convention directly, unlike Windows'
-        // Windows.Gaming.Input (up-positive, negated in the Windows
-        // backend). No sign flip needed here.
+        // Android's joystick Y is already down-positive (MotionEvent.AXIS_Y),
+        // like the wire protocol, so no sign flip.
         axes["leftStickY"] = event.getAxisValue(MotionEvent.AXIS_Y).toDouble()
         // Right stick is commonly reported on AXIS_Z/AXIS_RZ for HID
         // gamepads under Android's generic joystick mapping.
         axes["rightStickX"] = event.getAxisValue(MotionEvent.AXIS_Z).toDouble()
         axes["rightStickY"] = event.getAxisValue(MotionEvent.AXIS_RZ).toDouble()
-        axes["leftTrigger"] = event.getAxisValue(MotionEvent.AXIS_LTRIGGER).toDouble()
-        axes["rightTrigger"] = event.getAxisValue(MotionEvent.AXIS_RTRIGGER).toDouble()
+        // Many controllers (Xbox ones in particular) report their triggers on
+        // AXIS_BRAKE/AXIS_GAS instead of, or as well as, AXIS_LTRIGGER/
+        // AXIS_RTRIGGER; whichever is pressed further wins.
+        axes["leftTrigger"] = maxOf(
+            event.getAxisValue(MotionEvent.AXIS_LTRIGGER),
+            event.getAxisValue(MotionEvent.AXIS_BRAKE),
+        ).toDouble()
+        axes["rightTrigger"] = maxOf(
+            event.getAxisValue(MotionEvent.AXIS_RTRIGGER),
+            event.getAxisValue(MotionEvent.AXIS_GAS),
+        ).toDouble()
         return axes
     }
 

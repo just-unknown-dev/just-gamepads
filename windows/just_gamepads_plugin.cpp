@@ -34,8 +34,12 @@ void JustGamepadsPlugin::RegisterWithRegistrar(
                 [plugin_pointer](flutter::EncodableValue event) {
                   std::lock_guard<std::mutex> lock(
                       plugin_pointer->queue_mutex_);
+                  // One wake-up drains everything queued before it runs, so
+                  // only the first event of a batch needs to post one.
+                  const bool was_empty =
+                      plugin_pointer->pending_events_.empty();
                   plugin_pointer->pending_events_.push_back(std::move(event));
-                  if (plugin_pointer->message_window_) {
+                  if (was_empty && plugin_pointer->message_window_) {
                     PostMessage(plugin_pointer->message_window_,
                                 kWmGamepadEvent, 0, 0);
                   }

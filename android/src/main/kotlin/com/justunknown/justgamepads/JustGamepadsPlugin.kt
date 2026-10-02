@@ -2,6 +2,7 @@ package com.justunknown.justgamepads
 
 import android.content.Context
 import android.hardware.input.InputManager
+import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -10,22 +11,15 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.EventChannel
 
 /**
- * Connect/disconnect via [InputManager.InputDeviceListener]; per-frame state
- * via a [GamepadWindowCallbackWrapper] installed over the Activity's
- * [android.view.Window.Callback] — see that class's doc comment for why this
- * needs no `FlutterActivity` subclass. PlayStation controllers work
- * out-of-the-box here via Android's standard `SOURCE_JOYSTICK` HID support
- * (vendor `.kl` key-layout files handle the mapping at the OS level); no
- * special-casing needed for the event path, only for brand *detection* via
- * [android.view.InputDevice.getVendorId]/`getProductId`, sent up for the
- * shared Dart classifier.
+ * Connect/disconnect via [InputManager.InputDeviceListener]; state via a
+ * [GamepadWindowCallbackWrapper] installed over the Activity's
+ * [android.view.Window.Callback], so the host app needs no `FlutterActivity`
+ * subclass. PlayStation and other HID controllers work through Android's own
+ * key layout files; vendor/product ids go up for the shared Dart classifier.
  *
- * No thread marshaling is needed anywhere in this file (unlike the Windows
- * backend) — `InputDeviceListener` callbacks (registered with a null
- * `Handler`, so they use the calling thread's Looper) and
- * `dispatchKeyEvent`/`dispatchGenericMotionEvent` are both already delivered
- * on Android's main/UI thread, which is also where `onListen` (and thus
- * `registerInputDeviceListener`) is called from.
+ * Everything here runs on the main thread: the device listener is
+ * registered with a null Handler from `onListen` (main thread), and window
+ * callbacks are dispatched there too, so no locking is needed.
  */
 class JustGamepadsPlugin :
     FlutterPlugin,
@@ -39,9 +33,13 @@ class JustGamepadsPlugin :
     private var originalWindowCallback: android.view.Window.Callback? = null
     private var wrapperCallback: GamepadWindowCallbackWrapper? = null
 
-    // Per-device accumulated state — key events (buttons) and motion events
-    // (axes) each carry only half the picture; every event re-emits the
-    // full merged snapshot for that device (see emitState).
+    // Controllers reported as connected. Removal notices arrive for every
+    // input device (keyboards, mice...); only these produce a disconnect.
+    private val knownDevices = HashSet<Int>()
+
+    // Per-device accumulated state: key events (buttons) and motion events
+    // (axes) each carry half the picture; every event re-emits the full
+    // merged snapshot for that device (see emitState).
     private val buttonsByDevice = HashMap<Int, MutableSet<Int>>()
     private val axesByDevice = HashMap<Int, MutableMap<String, Double>>()
 
@@ -52,8 +50,7 @@ class JustGamepadsPlugin :
             override fun onInputDeviceRemoved(deviceId: Int) = handleDeviceRemoved(deviceId)
 
             override fun onInputDeviceChanged(deviceId: Int) {
-                // State comes from dispatch (see above), not from this
-                // notification — nothing to do here.
+                // State comes from dispatched events, not from this notice.
             }
         }
 
@@ -68,6 +65,7 @@ class JustGamepadsPlugin :
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setStreamHandler(null)
+        stopListening()
         inputManager = null
     }
 
@@ -84,8 +82,13 @@ class JustGamepadsPlugin :
     }
 
     override fun onCancel(arguments: Any?) {
+        stopListening()
+    }
+
+    private fun stopListening() {
         inputManager?.unregisterInputDeviceListener(deviceListener)
         eventSink = null
+        knownDevices.clear()
         buttonsByDevice.clear()
         axesByDevice.clear()
     }
@@ -125,10 +128,9 @@ class JustGamepadsPlugin :
         window.callback = wrapper
     }
 
-    // Rotation (a config change) tears down and rebuilds the Activity's
-    // Window.Callback chain — without this restore/reinstall pair, either
-    // gamepad support silently breaks after rotation or the callback gets
-    // double-wrapped on every config change.
+    // A config change (rotation) tears down and rebuilds the Activity's
+    // Window.Callback chain; without this restore/reinstall pair, gamepad
+    // input either stops after rotation or gets wrapped twice.
     private fun restoreWindowCallback() {
         val binding = activityBinding ?: return
         if (binding.activity.window.callback === wrapperCallback) {
@@ -142,21 +144,29 @@ class JustGamepadsPlugin :
 
     private fun handleDeviceAdded(deviceId: Int) {
         val device = inputManager?.getInputDevice(deviceId) ?: return
+        announce(device)
+    }
+
+    private fun announce(device: InputDevice) {
+        if (eventSink == null || device.id in knownDevices) return
         if (!GamepadEventMapper.isGamepadDevice(device)) return
-        emitConnected(deviceId, device.name ?: "", device.vendorId, device.productId)
+        knownDevices.add(device.id)
+        emitConnected(device.id, device.name ?: "", device.vendorId, device.productId)
     }
 
     private fun handleDeviceRemoved(deviceId: Int) {
         buttonsByDevice.remove(deviceId)
         axesByDevice.remove(deviceId)
-        emitDisconnected(deviceId)
+        if (knownDevices.remove(deviceId)) emitDisconnected(deviceId)
     }
 
-    // ── Per-frame state ──
+    // ── Per-event state ──
 
     private fun handleKeyEvent(event: KeyEvent) {
-        if (!GamepadEventMapper.isGamepadDevice(event.device)) return
+        val device = event.device ?: return
+        if (eventSink == null || !GamepadEventMapper.isGamepadDevice(device)) return
         val index = GamepadEventMapper.buttonIndexForKeyCode(event.keyCode) ?: return
+        announce(device)
         val buttons = buttonsByDevice.getOrPut(event.deviceId) { mutableSetOf() }
         when (event.action) {
             KeyEvent.ACTION_DOWN -> buttons.add(index)
@@ -167,8 +177,10 @@ class JustGamepadsPlugin :
     }
 
     private fun handleGenericMotionEvent(event: MotionEvent) {
-        if (!GamepadEventMapper.isGamepadDevice(event.device)) return
+        val device = event.device ?: return
+        if (eventSink == null || !GamepadEventMapper.isGamepadDevice(device)) return
         if (event.action != MotionEvent.ACTION_MOVE) return
+        announce(device)
 
         val axes = axesByDevice.getOrPut(event.deviceId) { mutableMapOf() }
         axes.putAll(GamepadEventMapper.axesForMotionEvent(event))
@@ -212,8 +224,10 @@ class JustGamepadsPlugin :
         event["event"] = "connected"
         event["id"] = deviceId.toString()
         event["name"] = name
-        event["vendorId"] = vendorId
-        event["productId"] = productId
+        if (vendorId != 0) {
+            event["vendorId"] = vendorId
+            event["productId"] = productId
+        }
         eventSink?.success(event)
     }
 
@@ -221,7 +235,6 @@ class JustGamepadsPlugin :
         val event = HashMap<String, Any?>()
         event["event"] = "disconnected"
         event["id"] = deviceId.toString()
-        event["name"] = ""
         eventSink?.success(event)
     }
 }

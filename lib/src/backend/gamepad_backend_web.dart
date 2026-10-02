@@ -10,116 +10,131 @@ import '../models/gamepad_info.dart';
 import '../models/gamepad_layout.dart';
 import '../models/gamepad_state.dart';
 import '../trigger_normalization.dart';
+import '../web_gamepad_id.dart';
 import 'gamepad_backend.dart';
 
+/// The backend for this platform.
 GamepadBackend createPlatformBackend() => WebGamepadBackend();
 
-/// Web backend: talks to the browser's Gamepad API directly
-/// (`navigator.getGamepads()`) via `package:web`/`dart:js_interop` — no
-/// platform channel, no native component at all, so this is pure Dart. The
-/// first backend built (see the plan's sequencing rationale): most modern
-/// controllers report `mapping == 'standard'`, which is already the exact
-/// W3C Standard Gamepad layout `just_inputs`' own `GamepadButton` mirrors, so
-/// this is a near-zero-remap pass-through for the common case.
+/// Web backend (dart2js and dart2wasm): reads the browser Gamepad API
+/// (`navigator.getGamepads()`) through `package:web`. No platform channel.
 ///
-/// The Gamepad API has no native "state changed" event (only
-/// `gamepadconnected`/`gamepaddisconnected`), so state must be polled —
-/// driven off `window.requestAnimationFrame` rather than `Timer.periodic`:
-/// it naturally pauses when the tab is backgrounded, avoiding both wasted
-/// polling and "stuck input" bugs on refocus (MDN's own recommended pattern
-/// for this API).
+/// Controllers whose `mapping` is `'standard'` already use the package's
+/// layout and pass straight through; anything else goes through the shared
+/// positional mapper.
+///
+/// The Gamepad API has no "state changed" event, so it is polled once per
+/// animation frame. Animation frames pause in background tabs, which avoids
+/// wasted polling there. Only changed states are emitted.
+///
+/// Browsers expose a controller only after the user presses a button on it
+/// while the page has focus.
 class WebGamepadBackend implements GamepadBackend {
   final _connections = StreamController<GamepadConnectionEvent>.broadcast();
   final _stateChanges = StreamController<GamepadStateEvent>.broadcast();
   final Map<String, GamepadInfo> _connected = {};
+  final Map<String, GamepadState> _lastState = {};
 
   bool _started = false;
+  bool _disposed = false;
   int? _frameCallbackId;
   web.EventListener? _onConnectListener;
   web.EventListener? _onDisconnectListener;
 
   @override
   Future<void> start() async {
+    if (_disposed) {
+      throw StateError('start() called on a disposed GamepadBackend.');
+    }
     if (_started) return;
     _started = true;
 
     _onConnectListener = (web.Event event) {
-      final gamepad = (event as web.GamepadEvent).gamepad;
-      _emitConnection(gamepad, connected: true);
+      _connect((event as web.GamepadEvent).gamepad);
     }.toJS;
     _onDisconnectListener = (web.Event event) {
-      final gamepad = (event as web.GamepadEvent).gamepad;
-      _emitConnection(gamepad, connected: false);
+      _disconnect((event as web.GamepadEvent).gamepad.index.toString());
     }.toJS;
     web.window.addEventListener('gamepadconnected', _onConnectListener);
     web.window.addEventListener('gamepaddisconnected', _onDisconnectListener);
 
-    // Some browsers only ever fire gamepadconnected for a pad that produces
-    // input after the listener was attached — pick up anything already
-    // connected (e.g. reported as part of a user gesture that preceded
-    // start()) on the very first poll too.
-    _pollOnce(initial: true);
+    // Pads that were exposed before start() never fire gamepadconnected
+    // for this listener; the first poll picks them up.
+    _poll();
     _scheduleNextFrame();
   }
 
   void _scheduleNextFrame() {
     _frameCallbackId = web.window.requestAnimationFrame(
       (num _) {
-        _pollOnce(initial: false);
-        if (_started) _scheduleNextFrame();
+        _frameCallbackId = null;
+        if (!_started) return;
+        _poll();
+        _scheduleNextFrame();
       }.toJS,
     );
   }
 
-  void _pollOnce({required bool initial}) {
+  void _poll() {
     final pads = web.window.navigator.getGamepads().toDart;
     for (final pad in pads) {
-      if (pad == null) continue;
+      if (pad == null || !pad.connected) continue;
       final id = pad.index.toString();
-      if (initial && !_connected.containsKey(id)) {
-        _emitConnection(pad, connected: true);
-      }
-      _stateChanges.add(
-        GamepadStateEvent(gamepadId: id, state: _readState(pad)),
-      );
+      if (!_connected.containsKey(id)) _connect(pad);
+      final state = _readState(pad);
+      if (state == _lastState[id]) continue;
+      _lastState[id] = state;
+      _stateChanges.add(GamepadStateEvent(gamepadId: id, state: state));
     }
   }
 
-  void _emitConnection(web.Gamepad gamepad, {required bool connected}) {
-    final id = gamepad.index.toString();
+  void _connect(web.Gamepad pad) {
+    final id = pad.index.toString();
+    if (_connected.containsKey(id)) return;
+    final parsed = parseWebGamepadId(pad.id);
     final info = GamepadInfo(
       id: id,
-      name: gamepad.id,
-      type: GamepadDatabase.classify(nameHint: gamepad.id),
+      name: parsed.name,
+      type: GamepadDatabase.classify(
+        vendorId: parsed.vendorId,
+        productId: parsed.productId,
+        nameHint: pad.id,
+      ),
+      vendorId: parsed.vendorId,
+      productId: parsed.productId,
     );
-    if (connected) {
-      _connected[id] = info;
-    } else {
-      _connected.remove(id);
-    }
-    _connections.add(GamepadConnectionEvent(info: info, connected: connected));
+    _connected[id] = info;
+    _connections.add(GamepadConnectionEvent(info: info, connected: true));
+  }
+
+  void _disconnect(String id) {
+    _lastState.remove(id);
+    final info = _connected.remove(id);
+    if (info == null) return;
+    _connections.add(GamepadConnectionEvent(info: info, connected: false));
   }
 
   GamepadState _readState(web.Gamepad pad) {
-    final isStandard = pad.mapping == 'standard';
     final buttons = pad.buttons.toDart;
-    final axes = pad.axes.toDart.map((v) => v.toDartDouble).toList();
+    final axes = [for (final v in pad.axes.toDart) v.toDartDouble];
 
     GamepadState state;
-    if (isStandard) {
-      final buttonsDown = <int>{
-        for (var i = 0; i < buttons.length; i++)
-          if (buttons[i].pressed) i,
-      };
-      final axesMap = <String, double>{
-        GamepadAxis.leftStickX: axes.isNotEmpty ? axes[0] : 0.0,
-        GamepadAxis.leftStickY: axes.length > 1 ? axes[1] : 0.0,
-        GamepadAxis.rightStickX: axes.length > 2 ? axes[2] : 0.0,
-        GamepadAxis.rightStickY: axes.length > 3 ? axes[3] : 0.0,
-        if (buttons.length > 6) GamepadAxis.leftTrigger: buttons[6].value,
-        if (buttons.length > 7) GamepadAxis.rightTrigger: buttons[7].value,
-      };
-      state = GamepadState(axes: axesMap, buttonsDown: buttonsDown);
+    if (pad.mapping == 'standard') {
+      double axisAt(int i) => i < axes.length ? axes[i] : 0.0;
+      state = GamepadState(
+        axes: {
+          GamepadAxis.leftStickX: axisAt(0),
+          GamepadAxis.leftStickY: axisAt(1),
+          GamepadAxis.rightStickX: axisAt(2),
+          GamepadAxis.rightStickY: axisAt(3),
+          if (buttons.length > 6) GamepadAxis.leftTrigger: buttons[6].value,
+          if (buttons.length > 7) GamepadAxis.rightTrigger: buttons[7].value,
+        },
+        buttonsDown: {
+          for (var i = 0; i < buttons.length && i <= 15; i++)
+            if (buttons[i].pressed) i,
+        },
+      );
     } else {
       state = mapGenericHid(
         rawAxes: axes,
@@ -140,21 +155,24 @@ class WebGamepadBackend implements GamepadBackend {
 
   @override
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     _started = false;
-    if (_frameCallbackId != null) {
-      web.window.cancelAnimationFrame(_frameCallbackId!);
-      _frameCallbackId = null;
+    final frame = _frameCallbackId;
+    if (frame != null) web.window.cancelAnimationFrame(frame);
+    _frameCallbackId = null;
+    final onConnect = _onConnectListener;
+    if (onConnect != null) {
+      web.window.removeEventListener('gamepadconnected', onConnect);
     }
-    if (_onConnectListener != null) {
-      web.window.removeEventListener('gamepadconnected', _onConnectListener);
+    final onDisconnect = _onDisconnectListener;
+    if (onDisconnect != null) {
+      web.window.removeEventListener('gamepaddisconnected', onDisconnect);
     }
-    if (_onDisconnectListener != null) {
-      web.window.removeEventListener(
-        'gamepaddisconnected',
-        _onDisconnectListener,
-      );
-    }
+    _onConnectListener = null;
+    _onDisconnectListener = null;
     _connected.clear();
+    _lastState.clear();
     _connections.close();
     _stateChanges.close();
   }

@@ -18,14 +18,6 @@ list(APPEND PLUGIN_SOURCES
   "evdev_gamepad_source.h"
 )
 
-# libudev — hot-plug detection for evdev_gamepad_source.cc. A system
-# dependency (`libudev-dev` on Debian/Ubuntu, `systemd-devel` on Fedora) the
-# eventual Linux-hardware builder must have installed; this plugin can't be
-# verified on this machine (no Linux desktop toolchain), so this requirement
-# is untested here.
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(UDEV REQUIRED libudev)
-
 # Define the plugin library target. Its name must not be changed (see comment
 # on PLUGIN_NAME above).
 add_library(${PLUGIN_NAME} SHARED
@@ -37,6 +29,11 @@ add_library(${PLUGIN_NAME} SHARED
 # full control over build settings.
 apply_standard_settings(${PLUGIN_NAME})
 
+# The app template asks for C++14 with -Werror; this plugin uses C++17, and
+# older compilers whose default is C++14 (e.g. clang 14 on Ubuntu 22.04)
+# would otherwise reject it.
+target_compile_features(${PLUGIN_NAME} PRIVATE cxx_std_17)
+
 # Symbols are hidden by default to reduce the chance of accidental conflicts
 # between plugins. This should not be removed; any symbols that should be
 # exported should be explicitly exported with the FLUTTER_PLUGIN_EXPORT macro.
@@ -44,14 +41,12 @@ set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
 target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 
-# Source include directories and library dependencies. Add any plugin-specific
-# dependencies here.
+# Source include directories and library dependencies. The plugin needs
+# nothing beyond GTK/GLib, which every Flutter Linux app already links.
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
-target_include_directories(${PLUGIN_NAME} PRIVATE ${UDEV_INCLUDE_DIRS})
-target_link_libraries(${PLUGIN_NAME} PRIVATE ${UDEV_LIBRARIES})
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
@@ -60,9 +55,3 @@ set(just_gamepads_bundled_libraries
   ""
   PARENT_SCOPE
 )
-
-# No unit test target: the plugin's evdev/libudev logic is exercised
-# end-to-end against real hardware, not mocked ioctl/libudev calls — the
-# shared wire-protocol parsing logic that WOULD be worth unit testing
-# already is, in Dart (see gamepad_wire_protocol_test.dart in the parent
-# package), which every backend's output feeds into identically.

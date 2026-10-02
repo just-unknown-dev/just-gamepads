@@ -1,23 +1,27 @@
 import 'dart:async';
 
 import 'backend/gamepad_backend.dart';
-import 'backend/gamepad_backend_native.dart'
-    if (dart.library.html) 'backend/gamepad_backend_web.dart' as platform;
+import 'backend/platform_backend.dart' as platform;
 import 'models/gamepad_events.dart';
 import 'models/gamepad_info.dart';
 import 'models/gamepad_state.dart';
 
-/// Public entry point: tracks every connected controller (so nothing about
-/// this API precludes future local-co-op support) and picks one *active* id
-/// — the controller that most recently produced real input — for callers
-/// (namely `just_inputs`' `GamepadInputAdapter`) that only want a single
-/// surfaced controller, this game being single-player.
+/// The entry point: tracks every connected controller and its latest state.
 ///
-/// Delegates all platform-specific work to a [GamepadBackend], selected via
-/// conditional import (native `EventChannel` plugin vs. the pure-Dart Web
-/// Gamepad API backend) unless one is injected — injection exists purely for
-/// tests; production code should just use [instance].
+/// ```dart
+/// final pads = GamepadManager.instance;
+/// pads.connections.listen((e) => print(e));
+/// pads.stateChanges.listen((e) => print(e.state.buttonsDown));
+/// await pads.start();
+/// ```
+///
+/// Every controller is reported separately, so local multiplayer can give
+/// each its own player. Single-player games can follow
+/// [mostRecentlyActiveId] instead.
 class GamepadManager {
+  /// Creates a manager over [backend], or over this platform's backend when
+  /// none is given. Production code should normally use [instance]; passing a
+  /// backend is meant for tests.
   GamepadManager({GamepadBackend? backend})
     : _backend = backend ?? platform.createPlatformBackend() {
     _connectionsSubscription = _backend.connections.listen(_onConnection);
@@ -25,7 +29,15 @@ class GamepadManager {
   }
 
   static GamepadManager? _instance;
+
+  /// The shared manager. Created on first use; [dispose] clears it so the
+  /// next access creates a fresh one.
   static GamepadManager get instance => _instance ??= GamepadManager();
+
+  // How far an axis must be pushed to count as a player touching the pad.
+  // Sticks drift and jitter around rest; this keeps an idle pad on the
+  // table from taking over [mostRecentlyActiveId].
+  static const double _activeAxisThreshold = 0.25;
 
   final GamepadBackend _backend;
   late final StreamSubscription<GamepadConnectionEvent>
@@ -33,30 +45,47 @@ class GamepadManager {
   late final StreamSubscription<GamepadStateEvent> _stateSubscription;
 
   final Map<String, GamepadState> _latestState = {};
-  final Map<String, DateTime> _lastInputAt = {};
+  // Which pad was touched last is an ordering, not a time: a counter that
+  // only goes up. Wall-clock stamps can tie (two pads inside one tick) and
+  // can go backwards when the system clock is adjusted.
+  final Map<String, int> _lastInputAt = {};
+  int _inputSequence = 0;
   String? _mostRecentlyActiveId;
+  bool _disposed = false;
 
   final _connectionsController =
       StreamController<GamepadConnectionEvent>.broadcast();
   final _stateChangesController =
       StreamController<GamepadStateEvent>.broadcast();
 
+  /// Starts reporting controllers. Safe to call more than once.
+  ///
+  /// Controllers already connected are reported on [connections] and then
+  /// listed in [connected]; subscribe before calling this to see them as
+  /// events.
   Future<void> start() => _backend.start();
 
+  /// The controllers connected right now.
   List<GamepadInfo> get connected => _backend.connected;
 
+  /// The latest state of the controller with [gamepadId], or `null` if it
+  /// hasn't reported any yet.
   GamepadState? latestState(String gamepadId) => _latestState[gamepadId];
 
-  /// The id of the controller that most recently produced real input (a
-  /// button/axis actually changed from neutral) — `null` if no connected
-  /// controller has been touched yet. Deliberately *not* "most recently
-  /// connected": an idle pad reconnecting (e.g. a Bluetooth blip) must not
-  /// silently steal input focus from a pad the player is actively using —
-  /// see [_onState].
+  /// The id of the controller a player touched most recently, or `null` if
+  /// no connected controller has been touched yet.
+  ///
+  /// "Touched" means a button was pressed or a stick or trigger was pushed
+  /// past a small deadzone. Connecting doesn't count, so an idle controller
+  /// reconnecting (a Bluetooth blip, say) never steals focus from the one in
+  /// use. When this controller disconnects, the previous one takes over.
   String? get mostRecentlyActiveId => _mostRecentlyActiveId;
 
+  /// Connects and disconnects, as they happen.
   Stream<GamepadConnectionEvent> get connections =>
       _connectionsController.stream;
+
+  /// State changes of connected controllers, as they happen.
   Stream<GamepadStateEvent> get stateChanges => _stateChangesController.stream;
 
   void _onConnection(GamepadConnectionEvent event) {
@@ -79,30 +108,35 @@ class GamepadManager {
   }
 
   void _onState(GamepadStateEvent event) {
-    // Compare against neutral (not "always differs") when this is the first
-    // snapshot seen for this id — otherwise a reconnecting-but-untouched pad
-    // would unconditionally steal activation on its very first post-connect
-    // snapshot, exactly the "idle pad steals focus" case this heuristic
-    // exists to avoid.
+    // The first snapshot of a pad is compared against rest, so a pad that
+    // connects untouched doesn't count as input.
     final previous = _latestState[event.gamepadId] ?? GamepadState.empty;
     _latestState[event.gamepadId] = event.state;
-    if (_stateDiffersFromNeutral(previous, event.state)) {
-      _lastInputAt[event.gamepadId] = DateTime.now();
+    if (_isPlayerInput(previous, event.state)) {
+      _lastInputAt[event.gamepadId] = ++_inputSequence;
       _mostRecentlyActiveId = event.gamepadId;
     }
     _stateChangesController.add(event);
   }
 
-  bool _stateDiffersFromNeutral(GamepadState previous, GamepadState next) {
-    if (next.buttonsDown.length != previous.buttonsDown.length) return true;
-    if (!next.buttonsDown.containsAll(previous.buttonsDown)) return true;
-    for (final entry in next.axes.entries) {
-      if ((previous.axes[entry.key] ?? 0) != entry.value) return true;
+  static bool _isPlayerInput(GamepadState previous, GamepadState next) {
+    for (final button in next.buttonsDown) {
+      if (!previous.buttonsDown.contains(button)) return true;
+    }
+    for (final MapEntry(:key, :value) in next.axes.entries) {
+      if (value.abs() >= _activeAxisThreshold &&
+          value != (previous.axes[key] ?? 0.0)) {
+        return true;
+      }
     }
     return false;
   }
 
+  /// Stops reporting, closes both streams and disposes the backend. If this
+  /// is [instance], the next access to [instance] creates a new manager.
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     _connectionsSubscription.cancel();
     _stateSubscription.cancel();
     _connectionsController.close();

@@ -27,7 +27,9 @@ class _FakeBackend implements GamepadBackend {
   }
 
   void disconnect(String id) {
-    final info = _connected.remove(id) ?? GamepadInfo(id: id, name: id, type: GamepadType.generic);
+    final info =
+        _connected.remove(id) ??
+        GamepadInfo(id: id, name: id, type: GamepadType.generic);
     _connections.add(GamepadConnectionEvent(info: info, connected: false));
   }
 
@@ -70,29 +72,29 @@ void main() {
 
   test('mostRecentlyActiveId is set on the first non-neutral state', () async {
     backend.connect('a');
-    backend.pushState(
-      'a',
-      GamepadState(buttonsDown: {GamepadButton.a}),
-    );
-    await flushMicrotasks();
-
-    expect(manager.mostRecentlyActiveId, 'a');
-  });
-
-  test('an idle reconnecting pad does not steal focus from an active one', () async {
-    backend.connect('a');
     backend.pushState('a', GamepadState(buttonsDown: {GamepadButton.a}));
     await flushMicrotasks();
-    expect(manager.mostRecentlyActiveId, 'a');
-
-    // Pad "b" reconnects (e.g. a Bluetooth blip) and its first snapshot is
-    // neutral — must not steal activation from "a".
-    backend.connect('b');
-    backend.pushState('b', GamepadState.empty);
-    await flushMicrotasks();
 
     expect(manager.mostRecentlyActiveId, 'a');
   });
+
+  test(
+    'an idle reconnecting pad does not steal focus from an active one',
+    () async {
+      backend.connect('a');
+      backend.pushState('a', GamepadState(buttonsDown: {GamepadButton.a}));
+      await flushMicrotasks();
+      expect(manager.mostRecentlyActiveId, 'a');
+
+      // Pad "b" reconnects (e.g. a Bluetooth blip) and its first snapshot is
+      // neutral — must not steal activation from "a".
+      backend.connect('b');
+      backend.pushState('b', GamepadState.empty);
+      await flushMicrotasks();
+
+      expect(manager.mostRecentlyActiveId, 'a');
+    },
+  );
 
   test('activation follows genuine input to a second controller', () async {
     backend.connect('a');
@@ -106,38 +108,120 @@ void main() {
     expect(manager.mostRecentlyActiveId, 'b');
   });
 
-  test('disconnecting the active controller falls back to the next most recent', () async {
+  test(
+    'disconnecting the active controller falls back to the next most recent',
+    () async {
+      backend.connect('a');
+      backend.pushState('a', GamepadState(buttonsDown: {GamepadButton.a}));
+      await flushMicrotasks();
+      backend.connect('b');
+      backend.pushState('b', GamepadState(buttonsDown: {GamepadButton.b}));
+      await flushMicrotasks();
+      expect(manager.mostRecentlyActiveId, 'b');
+
+      backend.disconnect('b');
+      await flushMicrotasks();
+
+      expect(manager.mostRecentlyActiveId, 'a');
+    },
+  );
+
+  test(
+    'recency is an order, not a time: pads touched in one tick still rank',
+    () async {
+      // Three pads pressed with no gap between them — the same instant on a
+      // wall clock. Taking the last one away must still hand focus to the one
+      // touched just before it, not to whichever a tie happened to favour.
+      backend
+        ..connect('a')
+        ..connect('b')
+        ..connect('c')
+        ..pushState('a', GamepadState(buttonsDown: {GamepadButton.a}))
+        ..pushState('b', GamepadState(buttonsDown: {GamepadButton.a}))
+        ..pushState('c', GamepadState(buttonsDown: {GamepadButton.a}));
+      await flushMicrotasks();
+      expect(manager.mostRecentlyActiveId, 'c');
+
+      backend.disconnect('c');
+      await flushMicrotasks();
+      expect(manager.mostRecentlyActiveId, 'b');
+
+      backend.disconnect('b');
+      await flushMicrotasks();
+      expect(manager.mostRecentlyActiveId, 'a');
+    },
+  );
+
+  test(
+    'disconnecting the only active controller clears mostRecentlyActiveId',
+    () async {
+      backend.connect('a');
+      backend.pushState('a', GamepadState(buttonsDown: {GamepadButton.a}));
+      await flushMicrotasks();
+
+      backend.disconnect('a');
+      await flushMicrotasks();
+
+      expect(manager.mostRecentlyActiveId, isNull);
+    },
+  );
+
+  test('stick drift on an idle pad does not steal focus', () async {
     backend.connect('a');
     backend.pushState('a', GamepadState(buttonsDown: {GamepadButton.a}));
-    await flushMicrotasks();
     backend.connect('b');
-    backend.pushState('b', GamepadState(buttonsDown: {GamepadButton.b}));
     await flushMicrotasks();
-    expect(manager.mostRecentlyActiveId, 'b');
 
-    backend.disconnect('b');
+    // Pad "b" lies on the table; its stick jitters around rest.
+    for (final drift in [0.004, 0.012, -0.03, 0.08, 0.004]) {
+      backend.pushState(
+        'b',
+        GamepadState(
+          axes: {GamepadAxis.leftStickX: drift, GamepadAxis.rightStickY: drift},
+        ),
+      );
+    }
     await flushMicrotasks();
 
     expect(manager.mostRecentlyActiveId, 'a');
   });
 
-  test('disconnecting the only active controller clears mostRecentlyActiveId', () async {
+  test('pushing a stick past the deadzone activates the pad', () async {
     backend.connect('a');
     backend.pushState('a', GamepadState(buttonsDown: {GamepadButton.a}));
+    backend.connect('b');
+    backend.pushState('b', GamepadState(axes: {GamepadAxis.leftStickX: 0.9}));
     await flushMicrotasks();
 
-    backend.disconnect('a');
-    await flushMicrotasks();
-
-    expect(manager.mostRecentlyActiveId, isNull);
+    expect(manager.mostRecentlyActiveId, 'b');
   });
 
-  test('latestState reflects the most recent snapshot for a given id', () async {
-    backend.connect('a');
-    final state = GamepadState(buttonsDown: {GamepadButton.x});
-    backend.pushState('a', state);
+  test('releasing a button is not new input', () async {
+    backend
+      ..connect('a')
+      ..connect('b')
+      ..pushState('b', GamepadState(buttonsDown: {GamepadButton.x}))
+      ..pushState('a', GamepadState(buttonsDown: {GamepadButton.a}))
+      ..pushState('b', GamepadState.empty);
     await flushMicrotasks();
 
-    expect(manager.latestState('a')?.buttonsDown, {GamepadButton.x});
+    expect(manager.mostRecentlyActiveId, 'a');
   });
+
+  test('dispose is idempotent', () {
+    manager.dispose();
+    expect(manager.dispose, returnsNormally);
+  });
+
+  test(
+    'latestState reflects the most recent snapshot for a given id',
+    () async {
+      backend.connect('a');
+      final state = GamepadState(buttonsDown: {GamepadButton.x});
+      backend.pushState('a', state);
+      await flushMicrotasks();
+
+      expect(manager.latestState('a')?.buttonsDown, {GamepadButton.x});
+    },
+  );
 }

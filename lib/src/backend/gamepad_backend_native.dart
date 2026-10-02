@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../models/gamepad_events.dart';
@@ -9,41 +10,78 @@ import 'gamepad_backend.dart';
 
 const _channel = EventChannel('just_gamepads/events');
 
+/// The backend for this platform.
 GamepadBackend createPlatformBackend() => NativeGamepadBackend();
 
-/// Backend for every platform that ships a real native plugin (Windows,
-/// Android, iOS, macOS, Linux) — subscribes once to a single shared
-/// `EventChannel` that every native side pushes batched, one-snapshot-per-
-/// device-per-tick connect/disconnect/state events into. All parsing lives
-/// in `gamepad_wire_protocol.dart`; this class is just the channel plumbing.
+/// Backend for every platform with a native plugin (Android, iOS, macOS,
+/// Windows, Linux).
+///
+/// Subscribes to one shared `EventChannel` that each native side feeds with
+/// connect, disconnect and full-snapshot state messages. Parsing lives in
+/// `gamepad_wire_protocol.dart`; this class is only the channel plumbing.
 class NativeGamepadBackend implements GamepadBackend {
+  /// Creates the backend. [channel] is replaceable for tests.
+  NativeGamepadBackend({@visibleForTesting EventChannel channel = _channel})
+    : _eventChannel = channel;
+
+  final EventChannel _eventChannel;
   StreamSubscription<dynamic>? _subscription;
   final _connections = StreamController<GamepadConnectionEvent>.broadcast();
   final _stateChanges = StreamController<GamepadStateEvent>.broadcast();
   final Map<String, GamepadInfo> _connected = {};
   bool _started = false;
+  bool _disposed = false;
 
   @override
   Future<void> start() async {
+    if (_disposed) {
+      throw StateError('start() called on a disposed GamepadBackend.');
+    }
     if (_started) return;
     _started = true;
-    _subscription = _channel.receiveBroadcastStream().listen(_handleMessage);
+    _subscription = _eventChannel.receiveBroadcastStream().listen(
+      _handleMessage,
+      onError: _report,
+    );
   }
 
   void _handleMessage(dynamic message) {
     if (message is! Map) return;
-    switch (message['event']) {
-      case 'connected':
-        final event = parseConnectionEvent(message);
-        _connected[event.info.id] = event.info;
-        _connections.add(event);
-      case 'disconnected':
-        final event = parseConnectionEvent(message);
-        _connected.remove(event.info.id);
-        _connections.add(event);
-      case 'state':
-        _stateChanges.add(parseStateEvent(message));
+    try {
+      switch (message['event']) {
+        case 'connected':
+          final event = parseConnectionEvent(message);
+          _connected[event.info.id] = event.info;
+          _connections.add(event);
+        case 'disconnected':
+          // Report the identity seen at connect time; ignore ids that never
+          // connected (a platform may report removal of any input device).
+          final info = _connected.remove(message['id']);
+          if (info != null) {
+            _connections.add(
+              GamepadConnectionEvent(info: info, connected: false),
+            );
+          }
+        case 'state':
+          final event = parseStateEvent(message);
+          if (_connected.containsKey(event.gamepadId)) {
+            _stateChanges.add(event);
+          }
+      }
+    } catch (error, stack) {
+      _report(error, stack);
     }
+  }
+
+  void _report(Object error, [StackTrace? stack]) {
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: error,
+        stack: stack,
+        library: 'just_gamepads',
+        context: ErrorDescription('while handling a gamepad platform event'),
+      ),
+    );
   }
 
   @override
@@ -57,11 +95,13 @@ class NativeGamepadBackend implements GamepadBackend {
 
   @override
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _started = false;
     _subscription?.cancel();
     _subscription = null;
     _connected.clear();
     _connections.close();
     _stateChanges.close();
-    _started = false;
   }
 }

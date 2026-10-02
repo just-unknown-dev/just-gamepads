@@ -4,27 +4,26 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'just_gamepads'
-  s.version          = '0.0.1'
-  s.summary          = 'A new Flutter plugin project.'
+  s.version          = '0.1.0'
+  s.summary          = 'Gamepad input for Flutter through Apple\'s GameController framework.'
   s.description      = <<-DESC
-A new Flutter plugin project.
+Reports Xbox, PlayStation, Switch Pro and MFi controllers to the just_gamepads
+Flutter plugin through Apple's GameController framework.
                        DESC
-  s.homepage         = 'http://example.com'
+  s.homepage         = 'https://github.com/just-unknown-dev/just-gamepads'
   s.license          = { :file => '../LICENSE' }
-  s.author           = { 'Your Company' => 'email@example.com' }
+  s.author           = { 'JustUnknown' => 'https://github.com/just-unknown-dev' }
 
   s.source           = { :path => '.' }
-  s.source_files = 'just_gamepads/Sources/just_gamepads/**/*'
-
-  # If your plugin requires a privacy manifest, for example if it collects user
-  # data, update the PrivacyInfo.xcprivacy file to describe your plugin's
-  # privacy impact, and then uncomment this line. For more information,
-  # see https://developer.apple.com/documentation/bundleresources/privacy_manifest_files
-  # s.resource_bundles = {'just_gamepads_privacy' => ['just_gamepads/Sources/just_gamepads/PrivacyInfo.xcprivacy']}
+  s.source_files = 'just_gamepads/Sources/just_gamepads/**/*.swift'
+  s.resource_bundles = {'just_gamepads_privacy' => ['just_gamepads/Sources/just_gamepads/PrivacyInfo.xcprivacy']}
 
   s.dependency 'FlutterMacOS'
+  s.frameworks = 'GameController'
 
-  s.platform = :osx, '10.11'
+  # GCExtendedGamepad's buttonMenu/buttonOptions and GCController's
+  # productCategory need macOS 10.15, which is also Flutter's minimum.
+  s.platform = :osx, '10.15'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.swift_version = '5.0'
 end

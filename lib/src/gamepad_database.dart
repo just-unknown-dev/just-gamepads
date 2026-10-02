@@ -10,22 +10,14 @@ class _VidPidEntry {
   final GamepadType type;
 }
 
-/// Classifies a controller into a [GamepadType] for UI presentation only —
-/// input resolution never depends on this, it always goes through the
-/// standard axis/button layout (`GamepadAxis`/`GamepadButton`) regardless of
-/// brand.
+/// Classifies a controller into a [GamepadType], for presentation only.
 ///
-/// This is the single shared classifier every native backend defers to
-/// instead of re-implementing a device table per platform (C++/Kotlin/Swift/
-/// C): a backend's only job is to enumerate devices and, for anything the
-/// OS/browser didn't already normalize to a standard gamepad, pass up raw
-/// `vendorId`/`productId`/`name` for this to classify.
+/// Every backend sends up whatever identifying information its platform has
+/// (USB vendor/product id, device name) and this one shared table decides
+/// the family, so the device list isn't duplicated per platform.
 ///
-/// Deliberately a small, curated list (not attempting SDL_GameControllerDB's
-/// exhaustive scope) — covers the controller families this project was
-/// asked to support (Xbox, PlayStation, generic) plus Switch Pro and a couple
-/// of common third-party entries, with a documented, permissive fallback for
-/// everything else.
+/// The list is deliberately small: Xbox, PlayStation and Nintendo by vendor
+/// id, then a name-based fallback. Anything else is [GamepadType.generic].
 abstract final class GamepadDatabase {
   // USB-IF vendor ids.
   static const _microsoftVendorId = 0x045E;
@@ -35,21 +27,26 @@ abstract final class GamepadDatabase {
 
   static const List<_VidPidEntry> _entries = [
     _VidPidEntry(_microsoftVendorId, null, GamepadType.xbox),
-    // Covers DualShock 4 (0x05C4, 0x09CC), DualSense (0x0CE6), and DualSense
-    // Edge (0x0DF2) alike — all classified identically, no need to
-    // distinguish individual PlayStation pad generations for UI purposes.
+    // DualShock 4 (0x05C4, 0x09CC), DualSense (0x0CE6) and DualSense Edge
+    // (0x0DF2) all share one family.
     _VidPidEntry(_sonyVendorId, null, GamepadType.playStation),
     _VidPidEntry(_nintendoVendorId, 0x2009, GamepadType.nintendoSwitchPro),
-    // 8BitDo controllers' reported layout varies by device/mode switch; safest
-    // default is generic rather than guessing a specific brand's glyphs.
+    // 8BitDo layouts change with the controller's mode switch, so their
+    // glyphs can't be guessed from the vendor id alone.
     _VidPidEntry(_eightBitDoVendorId, null, GamepadType.generic),
   ];
 
-  /// Classifies a controller from whatever identifying information a backend
-  /// was able to obtain. At least one of [vendorId] or [nameHint] should
-  /// normally be provided for a connected device; passing neither (e.g. "no
-  /// controller connected") returns [GamepadType.unknown].
-  static GamepadType classify({int? vendorId, int? productId, String? nameHint}) {
+  /// Classifies a controller from whatever a backend could identify.
+  ///
+  /// Matches [vendorId]/[productId] first, then falls back to well-known
+  /// words in [nameHint]. Returns [GamepadType.generic] for an unrecognized
+  /// controller and [GamepadType.unknown] when both [vendorId] and
+  /// [nameHint] are `null`.
+  static GamepadType classify({
+    int? vendorId,
+    int? productId,
+    String? nameHint,
+  }) {
     if (vendorId != null) {
       for (final entry in _entries) {
         if (entry.vendorId == vendorId &&
@@ -64,28 +61,22 @@ abstract final class GamepadDatabase {
     return GamepadType.generic;
   }
 
-  /// Name-substring fallback for platforms with no numeric vendor/product id
-  /// (Darwin's `vendorName`/`productCategory` on older OS versions, Web's
-  /// `gamepad.id` string) — also used as a secondary check even when a vendor
-  /// id was matched to nothing above, since some backends only have a name.
+  /// Name fallback for platforms without numeric ids (Apple's
+  /// GameController framework, some browsers), and for ids missing from the
+  /// table above.
   static GamepadType? _classifyByName(String? nameHint) {
     if (nameHint == null || nameHint.isEmpty) return null;
     final lower = nameHint.toLowerCase();
-    if (lower.contains('xbox') ||
-        lower.contains('xinput') ||
-        lower.contains('045e')) {
+    if (lower.contains('xbox') || lower.contains('xinput')) {
       return GamepadType.xbox;
     }
     if (lower.contains('dualsense') ||
         lower.contains('dualshock') ||
         lower.contains('playstation') ||
-        lower.contains('sony') ||
-        lower.contains('054c')) {
+        lower.contains('sony')) {
       return GamepadType.playStation;
     }
-    if (lower.contains('switch pro') ||
-        lower.contains('nintendo') ||
-        lower.contains('057e')) {
+    if (lower.contains('switch pro') || lower.contains('nintendo')) {
       return GamepadType.nintendoSwitchPro;
     }
     return null;

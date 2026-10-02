@@ -16,13 +16,16 @@ void main() {
     expect(state.axes[GamepadAxis.rightTrigger], 0.6);
   });
 
-  test('omits trigger axes entirely when the device reports fewer than 5 axes', () {
-    final state = mapGenericHid(rawAxes: [0.1, 0.2], rawButtons: const []);
+  test(
+    'omits trigger axes entirely when the device reports fewer than 5 axes',
+    () {
+      final state = mapGenericHid(rawAxes: [0.1, 0.2], rawButtons: const []);
 
-    expect(state.axes.containsKey(GamepadAxis.leftTrigger), isFalse);
-    expect(state.axes.containsKey(GamepadAxis.rightTrigger), isFalse);
-    expect(state.axes[GamepadAxis.rightStickX], 0.0);
-  });
+      expect(state.axes.containsKey(GamepadAxis.leftTrigger), isFalse);
+      expect(state.axes.containsKey(GamepadAxis.rightTrigger), isFalse);
+      expect(state.axes[GamepadAxis.rightStickX], 0.0);
+    },
+  );
 
   test('maps buttons positionally in declaration order', () {
     final state = mapGenericHid(
@@ -39,7 +42,10 @@ void main() {
       rawButtons: List.filled(20, true),
     );
 
-    expect(state.buttonsDown.every((b) => b <= GamepadButton.rightStick), isTrue);
+    expect(
+      state.buttonsDown.every((b) => b <= GamepadButton.rightStick),
+      isTrue,
+    );
   });
 
   test('dpad booleans map to the standard dpad button constants', () {

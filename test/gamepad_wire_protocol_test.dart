@@ -28,6 +28,18 @@ void main() {
 
       expect(event.connected, isFalse);
     });
+
+    test('a typeHint classifies without changing the display name', () {
+      final event = parseConnectionEvent(const {
+        'event': 'connected',
+        'id': 'gc-1',
+        'name': 'Pro Controller',
+        'typeHint': 'Switch Pro Controller',
+      });
+
+      expect(event.info.name, 'Pro Controller');
+      expect(event.info.type, GamepadType.nintendoSwitchPro);
+    });
   });
 
   group('parseStateEvent', () {
@@ -55,6 +67,34 @@ void main() {
 
       expect(event.state.axes[GamepadAxis.leftStickX], 0.1);
       expect(event.state.buttonsDown, {GamepadButton.a});
+    });
+
+    test('merges d-pad flags into a semantic state', () {
+      final event = parseStateEvent(const {
+        'id': 'dev-1',
+        'axes': <String, double>{},
+        'buttons': [GamepadButton.a],
+        'dpadUp': true,
+        'dpadLeft': true,
+        'dpadDown': false,
+      });
+
+      expect(event.state.buttonsDown, {
+        GamepadButton.a,
+        GamepadButton.dpadUp,
+        GamepadButton.dpadLeft,
+      });
+    });
+
+    test('maps d-pad flags on the raw path too', () {
+      final event = parseStateEvent(const {
+        'id': 'dev-2',
+        'rawAxes': <double>[],
+        'rawButtons': <bool>[],
+        'dpadRight': true,
+      });
+
+      expect(event.state.buttonsDown, {GamepadButton.dpadRight});
     });
 
     test('always applies trigger-button normalization', () {
