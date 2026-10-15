@@ -1,6 +1,6 @@
 name: just_gamepads
 description: "Gamepad input for Flutter on Android, iOS, macOS, Windows, Linux and the web (WASM too): Xbox, PlayStation, Nintendo and generic controllers in one standard layout."
-version: 0.1.0
+version: 0.1.1
 homepage: https://engine.justunknown.com/
 repository: https://github.com/just-unknown-dev/just-gamepads
 issue_tracker: https://github.com/just-unknown-dev/just-gamepads/issues

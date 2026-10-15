@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../generic_hid_mapper.dart';
 import '../models/gamepad_events.dart';
 import '../models/gamepad_info.dart';
 import '../wire/gamepad_wire_protocol.dart';
@@ -29,6 +30,7 @@ class NativeGamepadBackend implements GamepadBackend {
   final _connections = StreamController<GamepadConnectionEvent>.broadcast();
   final _stateChanges = StreamController<GamepadStateEvent>.broadcast();
   final Map<String, GamepadInfo> _connected = {};
+  final Map<String, RawAxisRest> _rests = {};
   bool _started = false;
   bool _disposed = false;
 
@@ -52,18 +54,20 @@ class NativeGamepadBackend implements GamepadBackend {
         case 'connected':
           final event = parseConnectionEvent(message);
           _connected[event.info.id] = event.info;
+          _rests[event.info.id] = RawAxisRest();
           _connections.add(event);
         case 'disconnected':
           // Report the identity seen at connect time; ignore ids that never
           // connected (a platform may report removal of any input device).
           final info = _connected.remove(message['id']);
+          _rests.remove(message['id']);
           if (info != null) {
             _connections.add(
               GamepadConnectionEvent(info: info, connected: false),
             );
           }
         case 'state':
-          final event = parseStateEvent(message);
+          final event = parseStateEvent(message, rest: _rests[message['id']]);
           if (_connected.containsKey(event.gamepadId)) {
             _stateChanges.add(event);
           }
@@ -101,6 +105,7 @@ class NativeGamepadBackend implements GamepadBackend {
     _subscription?.cancel();
     _subscription = null;
     _connected.clear();
+    _rests.clear();
     _connections.close();
     _stateChanges.close();
   }

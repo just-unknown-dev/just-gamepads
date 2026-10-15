@@ -51,6 +51,13 @@ void JustGamepadsPlugin::RegisterWithRegistrar(
                   flutter::StreamHandlerError<flutter::EncodableValue>> {
             plugin_pointer->watcher_.Stop();
             plugin_pointer->sink_ = nullptr;
+            // A hot restart cancels and listens again. Whatever the old
+            // listener had not been sent yet is not the new one's news:
+            // Start() announces every pad that is connected afresh.
+            {
+              std::lock_guard<std::mutex> lock(plugin_pointer->queue_mutex_);
+              plugin_pointer->pending_events_.clear();
+            }
             return nullptr;
           }));
 

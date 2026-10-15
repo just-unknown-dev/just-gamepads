@@ -62,7 +62,13 @@ GamepadConnectionEvent parseConnectionEvent(Map<dynamic, dynamic> raw) {
 }
 
 /// Parses a `state` message into a normalized [GamepadStateEvent].
-GamepadStateEvent parseStateEvent(Map<dynamic, dynamic> raw) {
+///
+/// [rest] is the device's [RawAxisRest], for the raw path: its axes read 0
+/// until they are used.
+GamepadStateEvent parseStateEvent(
+  Map<dynamic, dynamic> raw, {
+  RawAxisRest? rest,
+}) {
   final id = raw['id'] as String;
   final axes = raw['axes'] as Map<dynamic, dynamic>?;
   final buttons = raw['buttons'] as List<dynamic>?;
@@ -86,11 +92,12 @@ GamepadStateEvent parseStateEvent(Map<dynamic, dynamic> raw) {
       },
     );
   } else {
+    final rawAxes = [
+      for (final e in raw['rawAxes'] as List<dynamic>? ?? const [])
+        (e as num).toDouble(),
+    ];
     state = mapGenericHid(
-      rawAxes: [
-        for (final e in raw['rawAxes'] as List<dynamic>? ?? const [])
-          (e as num).toDouble(),
-      ],
+      rawAxes: rest?.apply(rawAxes) ?? rawAxes,
       rawButtons: [
         for (final e in raw['rawButtons'] as List<dynamic>? ?? const [])
           e as bool,

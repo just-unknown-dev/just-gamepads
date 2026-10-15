@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_gamepads/just_gamepads.dart';
+import 'package:just_gamepads/src/generic_hid_mapper.dart' show RawAxisRest;
 import 'package:just_gamepads/src/wire/gamepad_wire_protocol.dart';
 
 void main() {
@@ -67,6 +68,28 @@ void main() {
 
       expect(event.state.axes[GamepadAxis.leftStickX], 0.1);
       expect(event.state.buttonsDown, {GamepadButton.a});
+    });
+
+    test('raw axes read 0 until they move from where they were first', () {
+      // A receiver whose pad is asleep: every axis pinned at one end.
+      final rest = RawAxisRest();
+      Map<String, Object> asleep(double x) => {
+        'id': 'dev-3',
+        'rawAxes': [x, -1.0, -1.0, -1.0],
+        'rawButtons': <bool>[],
+      };
+      var event = parseStateEvent(asleep(-1), rest: rest);
+      expect(event.state.axes[GamepadAxis.leftStickX], 0);
+      expect(event.state.axes[GamepadAxis.leftStickY], 0);
+      event = parseStateEvent(asleep(-1), rest: rest);
+      expect(event.state.axes[GamepadAxis.leftStickX], 0, reason: 'still');
+
+      // Woken: the stick centred, then pushed right — now as reported.
+      event = parseStateEvent(asleep(0.02), rest: rest);
+      expect(event.state.axes[GamepadAxis.leftStickX], 0.02);
+      event = parseStateEvent(asleep(0.8), rest: rest);
+      expect(event.state.axes[GamepadAxis.leftStickX], 0.8);
+      expect(event.state.axes[GamepadAxis.leftStickY], 0, reason: 'unused');
     });
 
     test('merges d-pad flags into a semantic state', () {

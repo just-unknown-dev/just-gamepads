@@ -17,6 +17,9 @@ import 'models/gamepad_state.dart';
 ///
 /// Extra axes and buttons are ignored. The d-pad is passed separately because
 /// raw devices report it as a hat switch rather than buttons.
+///
+/// Raw axes are best passed through a [RawAxisRest] first: an unknown device
+/// can report its axes pinned at one end until it is used.
 GamepadState mapGenericHid({
   required List<double> rawAxes,
   required List<bool> rawButtons,
@@ -65,4 +68,38 @@ GamepadState mapGenericHid({
   };
 
   return GamepadState(axes: axes, buttonsDown: buttons);
+}
+
+/// Holds a raw device's axes at rest until they are used — SDL's rule for
+/// joysticks it does not know.
+///
+/// An unknown device can report every axis pinned at one end before it is
+/// touched: a wireless receiver whose pad is off or asleep reads 0 on
+/// Windows' 0..1 scale, which is -1 on a stick, so the stick would read as
+/// pushed fully over and a game would walk its player off on its own. So
+/// each axis reads 0 until it first moves away from the value it was first
+/// read at; from then on it reads as reported. One per connected device.
+final class RawAxisRest {
+  /// How far an axis must move from its first value to count as used.
+  static const double moved = 0.05;
+
+  List<double>? _first;
+  final List<bool> _live = [];
+
+  /// [axes] with every axis not yet used read as 0.
+  List<double> apply(List<double> axes) {
+    final first = _first ??= List.of(axes);
+    while (_live.length < axes.length) {
+      _live.add(false);
+    }
+    final out = List<double>.filled(axes.length, 0);
+    for (var i = 0; i < axes.length; i++) {
+      final resting =
+          !_live[i] && i < first.length && (axes[i] - first[i]).abs() <= moved;
+      if (resting) continue;
+      _live[i] = true;
+      out[i] = axes[i];
+    }
+    return out;
+  }
 }

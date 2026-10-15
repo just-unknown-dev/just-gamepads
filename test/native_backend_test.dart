@@ -94,6 +94,33 @@ void main() {
     expect(states.single.state.buttonsDown, {GamepadButton.a});
   });
 
+  test('a raw pad pinned at one end reads at rest until it is used', () async {
+    // A wireless receiver whose pad is off: Windows' raw path reads 0 on
+    // every axis, -1 on the wire. Read as is, its stick is held fully left.
+    Map<String, Object> reading(double x) => {
+      'event': 'state',
+      'id': 'p1',
+      'rawAxes': [x, -1.0, -1.0, -1.0],
+      'rawButtons': <bool>[],
+    };
+    sink
+      ..success({'event': 'connected', 'id': 'p1', 'name': 'Receiver'})
+      ..success(reading(-1))
+      ..success(reading(-0.3));
+    await pumpEventQueue();
+
+    expect(states[0].state.axes[GamepadAxis.leftStickX], 0);
+    expect(states[1].state.axes[GamepadAxis.leftStickX], -0.3);
+
+    // A reconnect starts afresh.
+    sink
+      ..success({'event': 'disconnected', 'id': 'p1'})
+      ..success({'event': 'connected', 'id': 'p1', 'name': 'Receiver'})
+      ..success(reading(-1));
+    await pumpEventQueue();
+    expect(states[2].state.axes[GamepadAxis.leftStickX], 0);
+  });
+
   test('a malformed message is reported, not thrown', () async {
     final errors = <FlutterErrorDetails>[];
     final previous = FlutterError.onError;

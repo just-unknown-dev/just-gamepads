@@ -1,21 +1,14 @@
 # Just Gamepads
 
-Gamepad input for Flutter on Android, iOS, macOS, Windows, Linux and the web,
-including WebAssembly builds. Xbox, PlayStation, Nintendo and generic
-controllers all report in one standard button and axis layout, so game code
-never deals with per-brand or per-platform differences.
+Gamepad input for Flutter on Android, iOS, macOS, Windows, Linux and the web, including WebAssembly builds. Xbox, PlayStation, Nintendo and generic controllers all report in one standard button and axis layout, so game code never deals with per-brand or per-platform differences.
 
 ## Features
 
-- Every connected controller, with connect and disconnect events, ready for
-  local multiplayer.
+- Every connected controller, with connect and disconnect events, ready for local multiplayer.
 - Full-state snapshots per controller: no deltas to reassemble.
-- One layout everywhere: the W3C Standard Gamepad buttons and axes, with
-  sticks in -1..1 (Y down-positive) and triggers in 0..1.
-- `mostRecentlyActiveId`: the controller a player touched last, for
-  single-player games. Stick drift on an idle controller doesn't count.
-- Controller families (Xbox, PlayStation, Nintendo, generic) for picking
-  button glyphs.
+- One layout everywhere: the W3C Standard Gamepad buttons and axes, with sticks in -1..1 (Y down-positive) and triggers in 0..1.
+- `mostRecentlyActiveId`: the controller a player touched last, for single-player games. Stick drift on an idle controller doesn't count.
+- Controller families (Xbox, PlayStation, Nintendo, generic) for picking button glyphs.
 
 ## Platform support
 
@@ -54,17 +47,13 @@ pads.stateChanges.listen((event) {
 await pads.start();
 ```
 
-Subscribe before calling `start()` to receive the controllers that are
-already connected as events; afterwards they are also listed in
-`pads.connected`. The latest state of any controller is available from
-`pads.latestState(id)` at any time.
+Subscribe before calling `start()` to receive the controllers that are already connected as events; afterwards they are also listed in `pads.connected`. The latest state of any controller is available from `pads.latestState(id)` at any time.
 
 Call `pads.dispose()` when the game shuts down.
 
 ## The standard layout
 
-Face buttons are named by position, using Xbox letters: `GamepadButton.a` is
-the bottom face button on every controller.
+Face buttons are named by position, using Xbox letters: `GamepadButton.a` is the bottom face button on every controller.
 
 | Index | `GamepadButton` | Xbox | PlayStation | Nintendo |
 | --- | --- | --- | --- | --- |
@@ -88,47 +77,31 @@ the bottom face button on every controller.
 | `leftStickY`, `rightStickY` | -1 (up) to 1 (down) |
 | `leftTrigger`, `rightTrigger` | 0 (released) to 1 (fully pressed) |
 
-The trigger buttons are derived from the analog triggers past
-`triggerButtonThreshold` (0.5) on platforms that only report an axis. Raw
-stick values are passed through as reported: apply your own deadzone.
+The trigger buttons are derived from the analog triggers past `triggerButtonThreshold` (0.5) on platforms that only report an axis. Raw stick values are passed through as reported: apply your own deadzone.
 
-`GamepadInfo.type` gives the controller family for glyphs. It is
-`GamepadType.generic` for controllers it can't identify.
+`GamepadInfo.type` gives the controller family for glyphs. It is `GamepadType.generic` for controllers it can't identify.
 
 ## Platform notes
 
-**Web.** Browsers expose a controller only after the user presses a button on
-it while the page has focus. Both `flutter build web` and
-`flutter build web --wasm` are supported.
+**Web.** Browsers expose a controller only after the user presses a button on it while the page has focus. Both `flutter build web` and `flutter build web --wasm` are supported.
 
-**Linux.** The app reads `/dev/input/event*` directly. Desktop distributions
-give the logged-in user access to game controllers; sandboxed apps (Flatpak,
-Snap) need device access granted. Controllers without the kernel's standard
-gamepad mapping are reported positionally, like on the other platforms'
-fallback paths.
+**Linux.** The app reads `/dev/input/event*` directly. Desktop distributions give the logged-in user access to game controllers; sandboxed apps (Flatpak, Snap) need device access granted. Controllers without the kernel's standard gamepad mapping are reported positionally, like on the other platforms' fallback paths.
 
-**Windows.** Xbox and XInput controllers are read through the Gamepad API;
-PlayStation, Switch and generic controllers through RawGameController.
-Windows may withhold controller input from apps that aren't in the
-foreground.
+**Windows.** Xbox and XInput controllers are read through the Gamepad API; PlayStation, Switch and generic controllers through RawGameController. Windows may withhold controller input from apps that aren't in the foreground.
 
-**Android.** Controller key events still reach Flutter as well, as
-`KeyEvent`s with `LogicalKeyboardKey.gameButton*` keys.
+**Android.** Controller key events still reach Flutter as well, as `KeyEvent`s with `LogicalKeyboardKey.gameButton*` keys.
 
-**iOS and macOS.** Controllers that only offer a micro gamepad profile (such
-as the Siri Remote) are not reported.
+**iOS and macOS.** Controllers that only offer a micro gamepad profile (such as the Siri Remote) are not reported.
 
 ## Testing
 
-`GamepadManager` accepts any `GamepadBackend`, so tests can drive it with a
-fake instead of real hardware:
+`GamepadManager` accepts any `GamepadBackend`, so tests can drive it with a fake instead of real hardware:
 
 ```dart
 final manager = GamepadManager(backend: FakeBackend());
 ```
 
-The `example/` app is a live controller tester for checking a controller on
-real hardware.
+The `example/` app is a live controller tester for checking a controller on real hardware.
 
 ## License
 
